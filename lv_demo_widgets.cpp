@@ -234,8 +234,8 @@ void lv_demo_widgets(void)
     lv_obj_set_style_bg_color(tab_btns, C_SURFACE, LV_STATE_CHECKED);
 
     /* Create tabs */
-    lv_obj_t *tab_arsenal = lv_tabview_add_tab(tv, LV_SYMBOL_HOME " Arsenal");
-    lv_obj_t *tab_widgets = lv_tabview_add_tab(tv, LV_SYMBOL_LIST " Widgets");
+    lv_obj_t *tab_arsenal = lv_tabview_add_tab(tv, LV_SYMBOL_LIST " Arsenal");
+    lv_obj_t *tab_widgets = lv_tabview_add_tab(tv, LV_SYMBOL_HOME " Widgets");
     lv_obj_t *tab_other = lv_tabview_add_tab(tv, LV_SYMBOL_SETTINGS " More");
 
     lv_obj_set_style_bg_color(tab_arsenal, C_BG, 0);
@@ -436,8 +436,35 @@ void fetch_arsenal_data()
         return;
     }
 
-    HTTPClient http;
+    /* Sync time with NTP server (UTC; timezone already set in lv_demo_widgets()) */
+    Serial.println("[Arsenal] Syncing time with NTP...");
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+    /* Set timezone for this background task */
+    setenv("TZ", CALGARY_TZ, 1);
+    tzset();
+
+    /* Wait for time to be synced (with timeout) */
     time_t now = time(NULL);
+    int ntp_attempts = 0;
+    const int NTP_TIMEOUT = 100;                      /* ~20 seconds at 200ms intervals */
+    while (now < 86400 && ntp_attempts < NTP_TIMEOUT) /* 86400 = 1 day in seconds; sanity check */
+    {
+        delay(200);
+        now = time(NULL);
+        ntp_attempts++;
+    }
+
+    if (now < 86400)
+    {
+        Serial.println("[Arsenal] Error: Failed to sync time with NTP");
+        g_data_error = true;
+        return;
+    }
+
+    Serial.printf("[Arsenal] Time synced to: %ld\n", now);
+
+    HTTPClient http;
     g_data_error = false;
     g_data_ready = false;
 
@@ -482,6 +509,19 @@ void fetch_arsenal_data()
                 g_fixture.days_until = (int)(difftime(g_fixture_time_utc, now) / 86400.0);
                 if (g_fixture.days_until < 0)
                     g_fixture.days_until = 0;
+
+                /* Ensure timezone is set before converting */
+                tzset();
+
+                /* Convert UTC time_t to Calgary local time (MDT/MST) and store formatted date */
+                struct tm *tm_calgary = localtime(&g_fixture_time_utc);
+                if (tm_calgary)
+                {
+                    char calgary_date_str[32];
+                    strftime(calgary_date_str, sizeof(calgary_date_str), "%Y-%m-%d %H:%M", tm_calgary);
+                    strlcpy(g_fixture.date, calgary_date_str, sizeof(g_fixture.date));
+                    Serial.printf("[Fixture] Match time converted to Calgary: %s\n", g_fixture.date);
+                }
             }
             g_data_ready = true;
             Serial.printf("[Fixture] Found: %s vs %s\n", g_fixture.home_name, g_fixture.away_name);
@@ -581,18 +621,11 @@ static void update_fixture_ui(void)
     lv_label_set_text(g_home_name_lbl, g_fixture.home_name);
     lv_label_set_text(g_away_name_lbl, g_fixture.away_name);
 
-    /* Date — convert UTC to Calgary time and format */
+    /* Date & Time — g_fixture.date is already in Calgary local time (MDT/MST) */
     char date_str[64] = "Date: —";
-    if (g_fixture_time_utc > 0)
+    if (g_fixture.date[0] != '\0')
     {
-        /* Convert UTC time_t to Calgary local time */
-        struct tm *tm_calgary = localtime(&g_fixture_time_utc);
-        if (tm_calgary)
-        {
-            char calgary_time[40];
-            strftime(calgary_time, sizeof(calgary_time), "%Y-%m-%d %H:%M", tm_calgary);
-            snprintf(date_str, sizeof(date_str), "Date: %s", calgary_time);
-        }
+        snprintf(date_str, sizeof(date_str), "Date: %s", g_fixture.date);
     }
     lv_label_set_text(g_date_lbl, date_str);
 
