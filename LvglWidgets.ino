@@ -192,6 +192,16 @@ void setup()
   // Serial.setDebugOutput(true);
   // while(!Serial);
   Serial.println("Arduino_GFX LVGL Widgets example");
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  Serial.println("Connecting...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    printWiFiStatus();
+    delay(500);
+  }
+  printWiFiStatus();
 
 #ifdef GFX_EXTRA_PRE_INIT
   GFX_EXTRA_PRE_INIT();
@@ -275,16 +285,6 @@ void setup()
     Serial.println("Setup done");
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  Serial.println("Connecting...");
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    printWiFiStatus();
-    delay(500);
-  }
-  printWiFiStatus();
 }
 
 void loop()
