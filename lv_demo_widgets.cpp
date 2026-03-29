@@ -720,93 +720,17 @@ static void update_standings_ui(void)
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Original demo tab (Widgets) — preserved
+   Widgets tab — empty for now
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static void create_widgets_tab(lv_obj_t *parent)
 {
-    lv_obj_set_style_pad_all(parent, 10, 0);
-
-    /* ── Slider ── */
-    lv_obj_t *lbl_sl = lv_label_create(parent);
-    lv_label_set_text(lbl_sl, "Slider");
-    lv_obj_add_style(lbl_sl, &style_dim, 0);
-
-    lv_obj_t *slider = lv_slider_create(parent);
-    lv_obj_set_width(slider, LV_PCT(90));
-    lv_obj_set_style_bg_color(slider, C_ACCENT,
-                              LV_PART_INDICATOR | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(slider, C_ACCENT,
-                              LV_PART_KNOB | LV_STATE_DEFAULT);
-
-    /* ── Switch ── */
-    lv_obj_t *lbl_sw = lv_label_create(parent);
-    lv_label_set_text(lbl_sw, "Switch");
-    lv_obj_add_style(lbl_sw, &style_dim, 0);
-
-    lv_obj_t *sw = lv_switch_create(parent);
-    lv_obj_set_style_bg_color(sw, C_ACCENT,
-                              LV_PART_INDICATOR | LV_STATE_CHECKED);
-
-    /* ── Arc ── */
-    lv_obj_t *lbl_arc = lv_label_create(parent);
-    lv_label_set_text(lbl_arc, "Arc");
-    lv_obj_add_style(lbl_arc, &style_dim, 0);
-
-    lv_obj_t *arc = lv_arc_create(parent);
-    lv_arc_set_value(arc, 70);
-    lv_obj_set_size(arc, 80, 80);
-    lv_obj_set_style_arc_color(arc, C_ACCENT,
-                               LV_PART_INDICATOR | LV_STATE_DEFAULT);
-
-    /* ── Button ── */
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_style_bg_color(btn, C_ACCENT, 0);
-    lv_obj_t *btn_lbl = lv_label_create(btn);
-    lv_label_set_text(btn_lbl, "Button");
-    lv_obj_add_style(btn_lbl, &style_body, 0);
-
-    /* ── Checkbox ── */
-    lv_obj_t *cb = lv_checkbox_create(parent);
-    lv_checkbox_set_text(cb, "Enable feature");
-    lv_obj_set_style_text_color(cb, C_TEXT, 0);
-    lv_obj_set_style_bg_color(cb, C_ACCENT,
-                              LV_PART_INDICATOR | LV_STATE_CHECKED);
-
-    /* ── Dropdown ── */
-    lv_obj_t *lbl_dd = lv_label_create(parent);
-    lv_label_set_text(lbl_dd, "Dropdown");
-    lv_obj_add_style(lbl_dd, &style_dim, 0);
-
-    lv_obj_t *dd = lv_dropdown_create(parent);
-    lv_dropdown_set_options(dd, "Option 1\nOption 2\nOption 3");
-    lv_obj_set_width(dd, LV_PCT(80));
-    lv_obj_set_style_bg_color(dd, C_CARD, 0);
-    lv_obj_set_style_text_color(dd, C_TEXT, 0);
+    (void)parent; /* Placeholder for future widgets */
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   "More" tab — placeholder
+   "More" tab — empty for now
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static void create_other_tab(lv_obj_t *parent)
 {
-    lv_obj_set_style_pad_all(parent, 16, 0);
-
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_add_style(card, &style_card, 0);
-    lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);
-
-    lv_obj_t *title = lv_label_create(card);
-    lv_label_set_text(title, LV_SYMBOL_SETTINGS "  Settings");
-    lv_obj_add_style(title, &style_title, 0);
-
-    lv_obj_t *info = lv_label_create(card);
-    lv_label_set_text(info,
-                      "Add your own content here.\n\n"
-                      "API key: edit API_FOOTBALL_KEY\n"
-                      "in lv_demo_widgets.c");
-    lv_obj_add_style(info, &style_dim, 0);
-    lv_obj_set_style_text_font(info, &lv_font_montserrat_14, 0);
-    lv_obj_align(info, LV_ALIGN_TOP_LEFT, 0, 28);
-    lv_label_set_long_mode(info, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(info, LV_PCT(90));
+    (void)parent; /* Placeholder for future content */
 }
