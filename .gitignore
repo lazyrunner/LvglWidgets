@@ -1,0 +1,2 @@
+# Ignore local secret configuration so API keys are not committed
+secrets.h

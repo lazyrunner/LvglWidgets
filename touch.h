@@ -28,7 +28,7 @@
 bool touch_swap_xy = false;
 int16_t touch_map_x1 = -1;
 int16_t touch_map_x2 = -1;
-int16_t touch_map_y1 = -1;
+int16_t touch_map_y1 = -1;  
 int16_t touch_map_y2 = -1;
 
 int16_t touch_max_x = 0, touch_max_y = 0;
