@@ -21,9 +21,9 @@
 #include <Preferences.h>
 #include <time.h>
 #include <WiFi.h>
+#include "secrets.h"
 
 /* ── User config ──────────────────────────────────────────── */
-#define FOOTBALL_API_TOKEN "3b4a18c3bf554701811c4066d682133d"
 #define ARSENAL_ID 57
 #define LEAGUE_CODE "PL"
 
@@ -31,6 +31,14 @@
 // MST is 7 hours behind UTC, MDT is 6 hours behind.
 // Rules: Starts March (M3) 2nd Sunday (.2.0), ends Nov (M11) 1st Sunday (.1.0)
 #define CALGARY_TZ "MST7MDT,M3.2.0,M11.1.0"
+/* ────────────────────────────────────────────────────────── */
+
+/* ── Google Calendar config ─────────────────────────────── */
+#define CALENDAR_MAX_EVENTS 5
+#define CALENDAR_LOOKAHEAD_HOURS 168
+#define CALENDAR_IDS {"primary", "2605dedd02f46bc2b31a09350f488621ae76510324ae4bc6a4e33682ae15b9af@group.calendar.google.com"}
+#define CALENDAR_NAMES {"Personal", "Family"}
+#define CALENDAR_COUNT 2
 /* ────────────────────────────────────────────────────────── */
 
 /* ── Dark colour palette ─────────────────────────────────── */
@@ -50,10 +58,15 @@
 /* ── Forward declarations ────────────────────────────────── */
 static void create_arsenal_tab(lv_obj_t *parent);
 static void create_widgets_tab(lv_obj_t *parent);
-static void create_other_tab(lv_obj_t *parent);
+static void create_calendar_tab(lv_obj_t *parent);
 static void fetch_arsenal_data(void);
 static void update_fixture_ui(void);
 static void update_standings_ui(void);
+static void calendar_tab_event_handler(lv_event_t *e);
+static void fetch_calendar_data(void);
+static void update_calendar_ui(void);
+static bool fetch_access_token(char *access_token, size_t len, int *expires_in);
+static bool parse_google_datetime(const char *input, char *out, size_t out_len, time_t *out_time);
 static void init_styles(void);
 
 static lv_style_t style_bg, style_card, style_title, style_body, style_dim, style_accent, style_divider, style_tab_btn;
@@ -80,6 +93,14 @@ struct Standing
     int points;
 };
 
+struct CalendarEvent
+{
+    char summary[64];
+    char local_time[32];
+    char calendar_name[48];
+    time_t event_time_t; /* For sorting */
+};
+
 static Fixture g_fixture;
 static Standing g_standings[20];
 static int g_standing_count = 0;
@@ -99,6 +120,17 @@ static lv_obj_t *g_league_lbl = NULL;
 static lv_obj_t *g_standing_cont = NULL;
 static lv_obj_t *g_status_lbl = NULL;
 static bool g_ui_update_ready = false; /* Flag set by background task to signal UI update */
+
+/* ── Calendar state ──────────────────────────────────────── */
+static CalendarEvent g_calendar_events[CALENDAR_MAX_EVENTS * 2]; /* Buffer for multi-calendar merge before trimming */
+static int g_calendar_event_count = 0;
+static bool g_calendar_data_ready = false;
+static bool g_calendar_data_error = false;
+static char g_calendar_error_msg[128] = {0};
+static lv_obj_t *g_calendar_container = NULL;
+static lv_obj_t *g_calendar_status_lbl = NULL;
+static bool g_calendar_view_initialized = false;
+static bool g_calendar_ui_update_ready = false;
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Style helpers
@@ -146,6 +178,11 @@ static void ui_update_timer_cb(lv_timer_t *timer)
         update_fixture_ui();
         update_standings_ui();
         g_ui_update_ready = false;
+    }
+    if (g_calendar_ui_update_ready)
+    {
+        update_calendar_ui();
+        g_calendar_ui_update_ready = false;
     }
 }
 
@@ -236,15 +273,18 @@ void lv_demo_widgets(void)
     /* Create tabs */
     lv_obj_t *tab_arsenal = lv_tabview_add_tab(tv, LV_SYMBOL_LIST " Arsenal");
     lv_obj_t *tab_widgets = lv_tabview_add_tab(tv, LV_SYMBOL_HOME " Widgets");
-    lv_obj_t *tab_other = lv_tabview_add_tab(tv, LV_SYMBOL_SETTINGS " More");
+    lv_obj_t *tab_calendar = lv_tabview_add_tab(tv, LV_SYMBOL_BELL " Calendar");
 
     lv_obj_set_style_bg_color(tab_arsenal, C_BG, 0);
     lv_obj_set_style_bg_color(tab_widgets, C_BG, 0);
-    lv_obj_set_style_bg_color(tab_other, C_BG, 0);
+    lv_obj_set_style_bg_color(tab_calendar, C_BG, 0);
 
     create_arsenal_tab(tab_arsenal);
     create_widgets_tab(tab_widgets);
-    create_other_tab(tab_other);
+    create_calendar_tab(tab_calendar);
+
+    /* Register tab change handler for calendar tab refresh on open */
+    lv_obj_add_event_cb(tv, calendar_tab_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
 
     /* Create timer that checks for deferred UI updates from background task */
     lv_timer_create(ui_update_timer_cb, 100, NULL); /* Check every 100ms */
@@ -753,17 +793,429 @@ static void update_standings_ui(void)
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Calendar tab
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+static void create_calendar_tab(lv_obj_t *parent)
+{
+    lv_obj_set_scroll_dir(parent, LV_DIR_VER);
+    lv_obj_set_style_pad_all(parent, 8, 0);
+    lv_obj_set_style_pad_row(parent, 10, 0);
+    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    /* Header */
+    lv_obj_t *header = lv_label_create(parent);
+    lv_label_set_text(header, LV_SYMBOL_BELL "  NEXT EVENTS");
+    lv_obj_add_style(header, &style_dim, 0);
+    lv_obj_set_style_text_font(header, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_letter_space(header, 2, 0);
+
+    /* Status label */
+    g_calendar_status_lbl = lv_label_create(parent);
+    lv_label_set_text(g_calendar_status_lbl, "Pull to load events...");
+    lv_obj_add_style(g_calendar_status_lbl, &style_dim, 0);
+    lv_obj_set_style_text_font(g_calendar_status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(g_calendar_status_lbl, LV_PCT(100));
+
+    /* Events container */
+    g_calendar_container = lv_obj_create(parent);
+    lv_obj_set_width(g_calendar_container, LV_PCT(100));
+    lv_obj_set_height(g_calendar_container, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(g_calendar_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(g_calendar_container, 0, 0);
+    lv_obj_set_style_pad_all(g_calendar_container, 0, 0);
+    lv_obj_set_style_pad_row(g_calendar_container, 0, 0);
+    lv_obj_set_flex_flow(g_calendar_container, LV_FLEX_FLOW_COLUMN);
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Calendar tab event handler — fetches data on tab open
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+static void calendar_tab_event_handler(lv_event_t *e)
+{
+    lv_obj_t *tv = lv_event_get_target(e);
+    uint16_t active_tab = lv_tabview_get_tab_act(tv);
+
+    /* Check if Calendar is the active tab (assuming it's index 2 after Arsenal=0, Widgets=1) */
+    if (active_tab == 2 && !g_calendar_view_initialized)
+    {
+        g_calendar_view_initialized = true;
+        Serial.println("[Calendar] Tab opened — spawning fetch task");
+
+        /* Spawn background task to fetch events */
+        xTaskCreatePinnedToCore(
+            [](void *)
+            {
+                fetch_calendar_data();
+                vTaskDelete(NULL);
+            },
+            "calendar_fetch",
+            16384,
+            NULL,
+            1,
+            NULL,
+            0);
+    }
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Fetch Google access token using refresh_token
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+static bool fetch_access_token(char *access_token, size_t len, int *expires_in)
+{
+    if (!access_token || len == 0)
+        return false;
+
+    HTTPClient http;
+    http.begin("https://oauth2.googleapis.com/token");
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    /* Build POST body */
+    String body = "client_id=" + String(GOOGLE_CLIENT_ID) +
+                  "&client_secret=" + String(GOOGLE_CLIENT_SECRET) +
+                  "&refresh_token=" + String(GOOGLE_REFRESH_TOKEN) +
+                  "&grant_type=refresh_token";
+
+    int httpCode = http.POST(body);
+    bool success = false;
+
+    if (httpCode == 200)
+    {
+        String payload = http.getString();
+        DynamicJsonDocument doc(1024);
+        DeserializationError err = deserializeJson(doc, payload);
+
+        if (!err && doc.containsKey("access_token"))
+        {
+            strlcpy(access_token, doc["access_token"] | "", len);
+            *expires_in = doc["expires_in"] | 3600;
+            success = true;
+            Serial.printf("[Calendar] Access token obtained, expires in %d seconds\n", *expires_in);
+        }
+        else
+        {
+            Serial.printf("[Calendar] Token parse error: %s\n", err.c_str());
+        }
+    }
+    else
+    {
+        Serial.printf("[Calendar] Token request failed: HTTP %d\n", httpCode);
+    }
+
+    http.end();
+    return success;
+}
+
+static bool parse_google_datetime(const char *input, char *out, size_t out_len, time_t *out_time)
+{
+    if (!input || !out || out_len == 0)
+        return false;
+
+    struct tm tm_dt = {0};
+
+    /* Try parsing full datetime: "2026-03-30T17:30:00-06:00" or "2026-03-30T17:30:00Z" */
+    if (strptime(input, "%Y-%m-%dT%H:%M:%S", &tm_dt))
+    {
+        /* Convert to time_t and back via localtime for timezone handling */
+        time_t t = utc_to_time_t(&tm_dt);
+
+        if (out_time)
+            *out_time = t; /* Store for sorting */
+
+        /* Ensure timezone is set */
+        tzset();
+
+        struct tm *tm_local = localtime(&t);
+        if (tm_local)
+        {
+            strftime(out, out_len, "%b %d, %H:%M", tm_local);
+            return true;
+        }
+    }
+    /* Try parsing all-day date: "2026-03-30" */
+    else if (strptime(input, "%Y-%m-%d", &tm_dt))
+    {
+        /* Convert struct tm to time_t, then back via localtime for timezone */
+        time_t t_allday = utc_to_time_t(&tm_dt);
+
+        if (out_time)
+            *out_time = t_allday; /* Store for sorting */
+
+        struct tm *tm_local = localtime(&t_allday);
+        if (tm_local)
+        {
+            strftime(out, out_len, "%b %d (all-day)", tm_local);
+            return true;
+        }
+    }
+
+    if (out_time)
+        *out_time = 0;            /* No valid time parsed */
+    strlcpy(out, input, out_len); /* Fallback: show raw input */
+    return false;
+}
+
+/* Compare events by time for sorting */
+static int compare_calendar_events(const void *a, const void *b)
+{
+    const CalendarEvent *evt_a = (const CalendarEvent *)a;
+    const CalendarEvent *evt_b = (const CalendarEvent *)b;
+
+    if (evt_a->event_time_t < evt_b->event_time_t)
+        return -1;
+    else if (evt_a->event_time_t > evt_b->event_time_t)
+        return 1;
+    return 0;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Fetch Google Calendar events
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+static void fetch_calendar_data(void)
+{
+    Serial.println("\n[Calendar] --- Starting fetch ---");
+
+    /* Check WiFi */
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.println("[Calendar] Error: WiFi not connected");
+        g_calendar_data_error = true;
+        strlcpy(g_calendar_error_msg, "WiFi not connected", sizeof(g_calendar_error_msg));
+        g_calendar_ui_update_ready = true;
+        return;
+    }
+
+    /* Ensure time is synced */
+    time_t now = time(NULL);
+    if (now < 86400)
+    {
+        Serial.println("[Calendar] Syncing time...");
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+        int tries = 0;
+        while (now < 86400 && tries < 100)
+        {
+            delay(200);
+            now = time(NULL);
+            tries++;
+        }
+    }
+
+    if (now < 86400)
+    {
+        Serial.println("[Calendar] Error: Failed to sync time");
+        g_calendar_data_error = true;
+        strlcpy(g_calendar_error_msg, "Time sync failed", sizeof(g_calendar_error_msg));
+        g_calendar_ui_update_ready = true;
+        return;
+    }
+
+    /* Set timezone */
+    setenv("TZ", CALGARY_TZ, 1);
+    tzset();
+
+    /* Fetch access token */
+    char access_token[512] = {0};
+    int expires_in = 0;
+    if (!fetch_access_token(access_token, sizeof(access_token), &expires_in))
+    {
+        Serial.println("[Calendar] Failed to get access token");
+        g_calendar_data_error = true;
+        strlcpy(g_calendar_error_msg, "Auth failed", sizeof(g_calendar_error_msg));
+        g_calendar_ui_update_ready = true;
+        return;
+    }
+
+    /* Build timeMin (now in ISO 8601 UTC) */
+    struct tm *tm_utc = gmtime(&now);
+    char timeMin[32] = {0};
+    strftime(timeMin, sizeof(timeMin), "%Y-%m-%dT%H:%M:%SZ", tm_utc);
+
+    /* Setup calendar IDs array */
+    const char *calendar_ids[CALENDAR_COUNT] = CALENDAR_IDS;
+    const char *calendar_names[CALENDAR_COUNT] = CALENDAR_NAMES;
+
+    g_calendar_event_count = 0;
+    g_calendar_data_ready = false;
+    g_calendar_data_error = false;
+
+    HTTPClient http;
+
+    /* Loop through each calendar and fetch events */
+    for (int cal_idx = 0; cal_idx < CALENDAR_COUNT; cal_idx++)
+    {
+        const char *cal_id = calendar_ids[cal_idx];
+        Serial.printf("[Calendar] Fetching from: %s\n", cal_id);
+
+        /* Build calendar API URL */
+        String calendarUrl = "https://www.googleapis.com/calendar/v3/calendars/" +
+                             String(cal_id) +
+                             "/events?orderBy=startTime&singleEvents=true&timeMin=" +
+                             String(timeMin) +
+                             "&maxResults=" + String(CALENDAR_MAX_EVENTS);
+
+        http.begin(calendarUrl);
+        http.addHeader("Authorization", "Bearer " + String(access_token));
+        http.addHeader("Accept-Encoding", "identity");
+
+        int httpCode = http.GET();
+
+        if (httpCode == 200)
+        {
+            String payload = http.getString();
+            DynamicJsonDocument doc(8192);
+            DeserializationError err = deserializeJson(doc, payload);
+
+            if (!err && doc.containsKey("items"))
+            {
+                JsonArray items = doc["items"];
+                for (JsonObject item : items)
+                {
+                    if (g_calendar_event_count >= CALENDAR_MAX_EVENTS * 2) /* Allow temporary overflow for multi-calendar merge */
+                        break;
+
+                    CalendarEvent &evt = g_calendar_events[g_calendar_event_count];
+
+                    /* Summary */
+                    strlcpy(evt.summary, item["summary"] | "(No title)", sizeof(evt.summary));
+
+                    /* Calendar name (display name) */
+                    strlcpy(evt.calendar_name, calendar_names[cal_idx], sizeof(evt.calendar_name));
+
+                    /* DateTime or Date */
+                    const char *dt_str = NULL;
+                    if (item.containsKey("start") && item["start"].containsKey("dateTime"))
+                    {
+                        dt_str = item["start"]["dateTime"];
+                    }
+                    else if (item.containsKey("start") && item["start"].containsKey("date"))
+                    {
+                        dt_str = item["start"]["date"];
+                    }
+
+                    if (dt_str)
+                    {
+                        parse_google_datetime(dt_str, evt.local_time, sizeof(evt.local_time), &evt.event_time_t);
+                    }
+                    else
+                    {
+                        strlcpy(evt.local_time, "Time TBD", sizeof(evt.local_time));
+                        evt.event_time_t = 0;
+                    }
+
+                    g_calendar_event_count++;
+                    Serial.printf("[Calendar] Event: %s @ %s\n", evt.summary, evt.local_time);
+                }
+
+                Serial.printf("[Calendar] From %s: %d events\n", cal_id, g_calendar_event_count);
+            }
+            else
+            {
+                Serial.printf("[Calendar] Parse error from %s: %s\n", cal_id, err.c_str());
+            }
+        }
+        else
+        {
+            Serial.printf("[Calendar] HTTP %d from %s\n", httpCode, cal_id);
+        }
+
+        http.end();
+    }
+
+    /* Sort all events by date/time */
+    if (g_calendar_event_count > 1)
+    {
+        qsort(g_calendar_events, g_calendar_event_count, sizeof(CalendarEvent), compare_calendar_events);
+        Serial.println("[Calendar] Events sorted by time");
+    }
+
+    /* Trim to max displayable events */
+    if (g_calendar_event_count > CALENDAR_MAX_EVENTS)
+    {
+        g_calendar_event_count = CALENDAR_MAX_EVENTS;
+        Serial.printf("[Calendar] Trimmed to %d events\n", CALENDAR_MAX_EVENTS);
+    }
+
+    if (g_calendar_event_count > 0)
+    {
+        g_calendar_data_ready = true;
+        Serial.printf("[Calendar] Total loaded: %d events\n", g_calendar_event_count);
+    }
+    else
+    {
+        g_calendar_data_error = true;
+        strlcpy(g_calendar_error_msg, "No events found", sizeof(g_calendar_error_msg));
+    }
+
+    /* Signal UI update */
+    g_calendar_ui_update_ready = true;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Update calendar UI with events
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+static void update_calendar_ui(void)
+{
+    if (!g_calendar_container || !g_calendar_status_lbl)
+        return;
+
+    lv_obj_clean(g_calendar_container);
+
+    if (g_calendar_data_error)
+    {
+        lv_label_set_text(g_calendar_status_lbl, g_calendar_error_msg);
+        return;
+    }
+
+    if (!g_calendar_data_ready)
+        return;
+
+    if (g_calendar_event_count == 0)
+    {
+        lv_label_set_text(g_calendar_status_lbl, "No events found");
+        return;
+    }
+
+    lv_label_set_text(g_calendar_status_lbl, "");
+
+    /* Create event rows */
+    for (int i = 0; i < g_calendar_event_count; i++)
+    {
+        CalendarEvent &evt = g_calendar_events[i];
+
+        /* Event card */
+        lv_obj_t *card = lv_obj_create(g_calendar_container);
+        lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_add_style(card, &style_card, 0);
+        lv_obj_set_style_pad_all(card, 10, 0);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+        /* DateTime */
+        lv_obj_t *dt_lbl = lv_label_create(card);
+        lv_label_set_text(dt_lbl, evt.local_time);
+        lv_obj_add_style(dt_lbl, &style_accent, 0);
+        lv_obj_set_style_text_font(dt_lbl, &lv_font_montserrat_14, 0);
+
+        /* Summary / Title */
+        lv_obj_t *title_lbl = lv_label_create(card);
+        lv_label_set_text(title_lbl, evt.summary);
+        lv_obj_add_style(title_lbl, &style_body, 0);
+        lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_14, 0);
+        lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(title_lbl, LV_PCT(100));
+
+        /* Calendar name (source) */
+        lv_obj_t *cal_lbl = lv_label_create(card);
+        lv_label_set_text(cal_lbl, evt.calendar_name);
+        lv_obj_add_style(cal_lbl, &style_dim, 0);
+        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_14, 0);
+    }
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Widgets tab — empty for now
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static void create_widgets_tab(lv_obj_t *parent)
 {
     (void)parent; /* Placeholder for future widgets */
-}
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   "More" tab — empty for now
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-static void create_other_tab(lv_obj_t *parent)
-{
-    (void)parent; /* Placeholder for future content */
 }
