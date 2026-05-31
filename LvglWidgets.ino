@@ -60,7 +60,7 @@ Arduino_GFX *gfx = create_default_Arduino_GFX();
 #define GFX_BL 1
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     45 /* cs */, 47 /* sck */, 21 /* d0 */, 48 /* d1 */, 40 /* d2 */, 39 /* d3 */);
-Arduino_GFX *g = new Arduino_NV3041A(bus, GFX_NOT_DEFINED /* RST */, 0 /* rotation */, true /* IPS */);
+Arduino_GFX *g = new Arduino_NV3041A(bus, GFX_NOT_DEFINED /* RST */, 2 /* rotation */, true /* IPS */);
 Arduino_GFX *gfx = new Arduino_Canvas(480 /* width */, 272 /* height */, g);
 #define CANVAS
 
@@ -220,7 +220,7 @@ void setup()
 #endif
 
   // Init touch device
-  touch_init(gfx->width(), gfx->height(), gfx->getRotation());
+  touch_init(gfx->width(), gfx->height(), g->getRotation());
 
   lv_init();
 
