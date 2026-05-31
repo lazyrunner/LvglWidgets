@@ -1,4 +1,4 @@
-/**
+ /**
  * @file lv_demo_widgets.c
  * Spotify Cassette Player — LVGL demo with Spotify Web API integration
  *
@@ -75,10 +75,17 @@ static bool g_spotify_data_ready = false;
 static bool g_spotify_data_error = false;
 static char g_spotify_error_msg[128] = {0};
 
+/* ── Canvas buffers for spinner spokes (drawn once, rotated via lv_img_set_angle) ── */
+#define SPINNER_SIZE 48
+static uint8_t g_left_canvas_buf[LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SPINNER_SIZE, SPINNER_SIZE)];
+static uint8_t g_right_canvas_buf[LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(SPINNER_SIZE, SPINNER_SIZE)];
+
 /* ── LVGL widget handles ─────────────────────────────────── */
 static lv_obj_t *g_cassette_img = NULL;
 static lv_obj_t *g_left_reel = NULL;
 static lv_obj_t *g_right_reel = NULL;
+static lv_obj_t *g_left_spinner = NULL;   /* lv_canvas — spoke pattern drawn on it */
+static lv_obj_t *g_right_spinner = NULL;
 static lv_obj_t *g_track_label = NULL;
 static lv_obj_t *g_artist_label = NULL;
 static lv_obj_t *g_album_label = NULL;
@@ -206,119 +213,209 @@ static void init_styles(void)
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static void create_cassette_screen(lv_obj_t *parent)
 {
-    lv_obj_set_scroll_dir(parent, LV_DIR_VER);
+    lv_obj_set_scroll_dir(parent, LV_DIR_NONE);
     lv_obj_set_style_pad_all(parent, 20, 0);
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(parent, 14, 0);
 
-    /* Cassette container */
-    lv_obj_t *cassette_cont = lv_obj_create(parent);
-    lv_obj_add_style(cassette_cont, &style_card, 0);
-    lv_obj_set_size(cassette_cont, 300, 200);
-    lv_obj_set_style_pad_all(cassette_cont, 10, 0);
-    lv_obj_set_flex_flow(cassette_cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(cassette_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    /* Cassette body (simple rectangle for now) */
-    lv_obj_t *cassette_body = lv_obj_create(cassette_cont);
-    lv_obj_set_size(cassette_body, 250, 120);
-    lv_obj_set_style_bg_color(cassette_body, lv_color_hex(0x8B4513), 0); // Brown color
-    lv_obj_set_style_border_width(cassette_body, 2, 0);
-    lv_obj_set_style_border_color(cassette_body, lv_color_hex(0x654321), 0);
-    lv_obj_set_style_radius(cassette_body, 5, 0);
-
-    /* Left reel */
-    g_left_reel = lv_obj_create(cassette_body);
-    lv_obj_set_size(g_left_reel, 40, 40);
-    lv_obj_set_style_bg_color(g_left_reel, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_radius(g_left_reel, 20, 0);
-    lv_obj_set_style_border_width(g_left_reel, 2, 0);
-    lv_obj_set_style_border_color(g_left_reel, lv_color_hex(0x333333), 0);
-    lv_obj_align(g_left_reel, LV_ALIGN_LEFT_MID, 20, 0);
-
-    /* Right reel */
-    g_right_reel = lv_obj_create(cassette_body);
-    lv_obj_set_size(g_right_reel, 40, 40);
-    lv_obj_set_style_bg_color(g_right_reel, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_radius(g_right_reel, 20, 0);
-    lv_obj_set_style_border_width(g_right_reel, 2, 0);
-    lv_obj_set_style_border_color(g_right_reel, lv_color_hex(0x333333), 0);
-    lv_obj_align(g_right_reel, LV_ALIGN_RIGHT_MID, -20, 0);
-
-    /* Track info below cassette */
-    lv_obj_t *info_cont = lv_obj_create(parent);
-    lv_obj_set_size(info_cont, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(info_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(info_cont, 0, 0);
-    lv_obj_set_style_pad_all(info_cont, 0, 0);
-    lv_obj_set_flex_flow(info_cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(info_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    g_track_label = lv_label_create(info_cont);
+    /* Track title — sits above the cassette body */
+    g_track_label = lv_label_create(parent);
     lv_label_set_text(g_track_label, "Loading...");
+    lv_label_set_long_mode(g_track_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(g_track_label, 300);
     lv_obj_add_style(g_track_label, &style_title, 0);
     lv_obj_set_style_text_align(g_track_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    g_artist_label = lv_label_create(info_cont);
+    /* Cassette body — holds prev, reels, play/pause, next in one row */
+    lv_obj_t *cassette_body = lv_obj_create(parent);
+    lv_obj_set_size(cassette_body, 360, 80);
+    lv_obj_set_style_bg_color(cassette_body, lv_color_hex(0xBFAE94), 0);
+    lv_obj_set_style_radius(cassette_body, 10, 0);
+    lv_obj_set_style_border_width(cassette_body, 2, 0);
+    lv_obj_set_style_border_color(cassette_body, lv_color_hex(0x9A8C76), 0);
+    lv_obj_set_style_pad_hor(cassette_body, 12, 0);
+    lv_obj_set_style_pad_ver(cassette_body, 0, 0);
+    lv_obj_set_flex_flow(cassette_body, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cassette_body, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    /* Prev button */
+    g_prev_btn = lv_btn_create(cassette_body);
+    lv_obj_set_size(g_prev_btn, 38, 38);
+    lv_obj_set_style_bg_color(g_prev_btn, lv_color_hex(0x2A2520), 0);
+    lv_obj_set_style_radius(g_prev_btn, 19, 0);
+    lv_obj_set_style_border_width(g_prev_btn, 0, 0);
+    lv_obj_set_style_shadow_width(g_prev_btn, 0, 0);
+    lv_obj_t *prev_label = lv_label_create(g_prev_btn);
+    lv_label_set_text(prev_label, LV_SYMBOL_PREV);
+    lv_obj_add_style(prev_label, &style_body, 0);
+    lv_obj_center(prev_label);
+    lv_obj_add_event_cb(g_prev_btn, [](lv_event_t *e)
+                        { spotify_control("previous"); }, LV_EVENT_CLICKED, NULL);
+
+    /* Left reel — static, no rotation */
+    g_left_reel = lv_obj_create(cassette_body);
+    lv_obj_set_size(g_left_reel, 58, 58);
+    lv_obj_clear_flag(g_left_reel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(g_left_reel, 0, 0);
+    lv_obj_set_style_bg_color(g_left_reel, lv_color_hex(0x2A2520), 0);
+    lv_obj_set_style_radius(g_left_reel, 29, 0);
+    lv_obj_set_style_border_width(g_left_reel, 3, 0);
+    lv_obj_set_style_border_color(g_left_reel, lv_color_hex(0x6A6055), 0);
+
+    /* Left spinner — alpha canvas; transparent corners give circular appearance */
+    g_left_spinner = lv_canvas_create(g_left_reel);
+    lv_canvas_set_buffer(g_left_spinner, g_left_canvas_buf, SPINNER_SIZE, SPINNER_SIZE, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    lv_obj_center(g_left_spinner);
+    lv_img_set_pivot(g_left_spinner, SPINNER_SIZE / 2, SPINNER_SIZE / 2);
+    lv_canvas_fill_bg(g_left_spinner, lv_color_black(), LV_OPA_TRANSP);
+    {
+        lv_draw_rect_dsc_t cdsc;
+        lv_draw_rect_dsc_init(&cdsc);
+        cdsc.bg_color = lv_color_hex(0x3A3530); cdsc.bg_opa = LV_OPA_60;
+        cdsc.radius = LV_RADIUS_CIRCLE; cdsc.border_width = 0;
+        lv_canvas_draw_rect(g_left_spinner, 0, 0, SPINNER_SIZE, SPINNER_SIZE, &cdsc);
+        lv_draw_line_dsc_t ldsc;
+        lv_draw_line_dsc_init(&ldsc);
+        ldsc.color = C_TEXT; ldsc.opa = LV_OPA_80; ldsc.width = 3;
+        ldsc.round_start = 1; ldsc.round_end = 1;
+        lv_point_t s0[] = {{24, 24}, {24, 4}};   /* up        0°  */
+        lv_point_t s1[] = {{24, 24}, {41, 34}};  /* lower-right 120° */
+        lv_point_t s2[] = {{24, 24}, {7,  34}};  /* lower-left  240° */
+        lv_canvas_draw_line(g_left_spinner, s0, 2, &ldsc);
+        lv_canvas_draw_line(g_left_spinner, s1, 2, &ldsc);
+        lv_canvas_draw_line(g_left_spinner, s2, 2, &ldsc);
+        lv_draw_rect_dsc_t rdsc;
+        lv_draw_rect_dsc_init(&rdsc);
+        rdsc.bg_color = C_TEXT; rdsc.bg_opa = LV_OPA_90;
+        rdsc.radius = LV_RADIUS_CIRCLE; rdsc.border_width = 0;
+        lv_canvas_draw_rect(g_left_spinner, 20, 20, 8, 8, &rdsc);
+    }
+
+    /* Play/Pause button — center of cassette */
+    g_play_pause_btn = lv_btn_create(cassette_body);
+    lv_obj_set_size(g_play_pause_btn, 48, 48);
+    lv_obj_set_style_bg_color(g_play_pause_btn, lv_color_hex(0x2A2520), 0);
+    lv_obj_set_style_radius(g_play_pause_btn, 24, 0);
+    lv_obj_set_style_border_width(g_play_pause_btn, 0, 0);
+    lv_obj_set_style_shadow_width(g_play_pause_btn, 0, 0);
+    lv_obj_t *play_label = lv_label_create(g_play_pause_btn);
+    lv_label_set_text(play_label, LV_SYMBOL_PLAY);
+    lv_obj_add_style(play_label, &style_body, 0);
+    lv_obj_center(play_label);
+    lv_obj_add_event_cb(g_play_pause_btn, [](lv_event_t *e)
+    {
+        /* Capture the command before flipping local state */
+        const char *cmd = g_current_track.is_playing ? "pause" : "play";
+        bool now_playing = !g_current_track.is_playing;
+        g_current_track.is_playing = now_playing;
+
+        /* Immediately update button icon */
+        lv_obj_t *btn_label = lv_obj_get_child(g_play_pause_btn, 0);
+        if (btn_label)
+            lv_label_set_text(btn_label, now_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+
+        /* Immediately start/stop reel animation */
+        if (now_playing) {
+            if (!lv_anim_get(g_left_spinner, reel_anim_cb))
+                lv_anim_start(&g_left_anim);
+            if (!lv_anim_get(g_right_spinner, reel_anim_cb))
+                lv_anim_start(&g_right_anim);
+        } else {
+            lv_anim_del(g_left_spinner, reel_anim_cb);
+            lv_anim_del(g_right_spinner, reel_anim_cb);
+            lv_img_set_angle(g_left_spinner, 0);
+            lv_img_set_angle(g_right_spinner, 0);
+        }
+
+        /* Send the HTTP command in the background — UI is already updated */
+        xTaskCreatePinnedToCore(
+            [](void *param) {
+                spotify_control((const char *)param);
+                vTaskDelete(NULL);
+            },
+            "play_pause_cmd", 16384, (void *)cmd, 1, NULL, 0);
+    }, LV_EVENT_CLICKED, NULL);
+
+    /* Right reel — static, no rotation */
+    g_right_reel = lv_obj_create(cassette_body);
+    lv_obj_set_size(g_right_reel, 58, 58);
+    lv_obj_clear_flag(g_right_reel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(g_right_reel, 0, 0);
+    lv_obj_set_style_bg_color(g_right_reel, lv_color_hex(0x2A2520), 0);
+    lv_obj_set_style_radius(g_right_reel, 29, 0);
+    lv_obj_set_style_border_width(g_right_reel, 3, 0);
+    lv_obj_set_style_border_color(g_right_reel, lv_color_hex(0x6A6055), 0);
+
+    /* Right spinner — same spoke pattern, clockwise */
+    g_right_spinner = lv_canvas_create(g_right_reel);
+    lv_canvas_set_buffer(g_right_spinner, g_right_canvas_buf, SPINNER_SIZE, SPINNER_SIZE, LV_IMG_CF_TRUE_COLOR_ALPHA);
+    lv_obj_center(g_right_spinner);
+    lv_img_set_pivot(g_right_spinner, SPINNER_SIZE / 2, SPINNER_SIZE / 2);
+    lv_canvas_fill_bg(g_right_spinner, lv_color_black(), LV_OPA_TRANSP);
+    {
+        lv_draw_rect_dsc_t cdsc;
+        lv_draw_rect_dsc_init(&cdsc);
+        cdsc.bg_color = lv_color_hex(0x3A3530); cdsc.bg_opa = LV_OPA_60;
+        cdsc.radius = LV_RADIUS_CIRCLE; cdsc.border_width = 0;
+        lv_canvas_draw_rect(g_right_spinner, 0, 0, SPINNER_SIZE, SPINNER_SIZE, &cdsc);
+        lv_draw_line_dsc_t ldsc;
+        lv_draw_line_dsc_init(&ldsc);
+        ldsc.color = C_TEXT; ldsc.opa = LV_OPA_80; ldsc.width = 3;
+        ldsc.round_start = 1; ldsc.round_end = 1;
+        lv_point_t s0[] = {{24, 24}, {24, 4}};
+        lv_point_t s1[] = {{24, 24}, {41, 34}};
+        lv_point_t s2[] = {{24, 24}, {7,  34}};
+        lv_canvas_draw_line(g_right_spinner, s0, 2, &ldsc);
+        lv_canvas_draw_line(g_right_spinner, s1, 2, &ldsc);
+        lv_canvas_draw_line(g_right_spinner, s2, 2, &ldsc);
+        lv_draw_rect_dsc_t rdsc;
+        lv_draw_rect_dsc_init(&rdsc);
+        rdsc.bg_color = C_TEXT; rdsc.bg_opa = LV_OPA_90;
+        rdsc.radius = LV_RADIUS_CIRCLE; rdsc.border_width = 0;
+        lv_canvas_draw_rect(g_right_spinner, 20, 20, 8, 8, &rdsc);
+    }
+
+    /* Next button */
+    g_next_btn = lv_btn_create(cassette_body);
+    lv_obj_set_size(g_next_btn, 38, 38);
+    lv_obj_set_style_bg_color(g_next_btn, lv_color_hex(0x2A2520), 0);
+    lv_obj_set_style_radius(g_next_btn, 19, 0);
+    lv_obj_set_style_border_width(g_next_btn, 0, 0);
+    lv_obj_set_style_shadow_width(g_next_btn, 0, 0);
+    lv_obj_t *next_label = lv_label_create(g_next_btn);
+    lv_label_set_text(next_label, LV_SYMBOL_NEXT);
+    lv_obj_add_style(next_label, &style_body, 0);
+    lv_obj_center(next_label);
+    lv_obj_add_event_cb(g_next_btn, [](lv_event_t *e)
+                        { spotify_control("next"); }, LV_EVENT_CLICKED, NULL);
+
+    /* Artist label — below cassette */
+    g_artist_label = lv_label_create(parent);
     lv_label_set_text(g_artist_label, "—");
     lv_obj_add_style(g_artist_label, &style_body, 0);
     lv_obj_set_style_text_align(g_artist_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    g_album_label = lv_label_create(info_cont);
+    /* Album label */
+    g_album_label = lv_label_create(parent);
     lv_label_set_text(g_album_label, "—");
     lv_obj_add_style(g_album_label, &style_dim, 0);
     lv_obj_set_style_text_align(g_album_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    /* Control buttons */
-    lv_obj_t *btn_cont = lv_obj_create(parent);
-    lv_obj_set_size(btn_cont, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(btn_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btn_cont, 0, 0);
-    lv_obj_set_style_pad_all(btn_cont, 0, 0);
-    lv_obj_set_flex_flow(btn_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    g_prev_btn = lv_btn_create(btn_cont);
-    lv_obj_set_size(g_prev_btn, 60, 60);
-    lv_obj_add_style(g_prev_btn, &style_card, 0);
-    lv_obj_t *prev_label = lv_label_create(g_prev_btn);
-    lv_label_set_text(prev_label, LV_SYMBOL_PREV);
-    lv_obj_add_style(prev_label, &style_body, 0);
-    lv_obj_add_event_cb(g_prev_btn, [](lv_event_t *e)
-                        { spotify_control("previous"); }, LV_EVENT_CLICKED, NULL);
-
-    g_play_pause_btn = lv_btn_create(btn_cont);
-    lv_obj_set_size(g_play_pause_btn, 80, 80);
-    lv_obj_add_style(g_play_pause_btn, &style_card, 0);
-    lv_obj_t *play_label = lv_label_create(g_play_pause_btn);
-    lv_label_set_text(play_label, LV_SYMBOL_PLAY);
-    lv_obj_add_style(play_label, &style_body, 0);
-    lv_obj_add_event_cb(g_play_pause_btn, [](lv_event_t *e)
-                        { spotify_control("play_pause"); }, LV_EVENT_CLICKED, NULL);
-
-    g_next_btn = lv_btn_create(btn_cont);
-    lv_obj_set_size(g_next_btn, 60, 60);
-    lv_obj_add_style(g_next_btn, &style_card, 0);
-    lv_obj_t *next_label = lv_label_create(g_next_btn);
-    lv_label_set_text(next_label, LV_SYMBOL_NEXT);
-    lv_obj_add_style(next_label, &style_body, 0);
-    lv_obj_add_event_cb(g_next_btn, [](lv_event_t *e)
-                        { spotify_control("next"); }, LV_EVENT_CLICKED, NULL);
-
     /* Initialize animation for reels */
     lv_anim_init(&g_left_anim);
-    lv_anim_set_var(&g_left_anim, g_left_reel);
+    lv_anim_set_var(&g_left_anim, g_left_spinner);
     lv_anim_set_exec_cb(&g_left_anim, reel_anim_cb);
     lv_anim_set_time(&g_left_anim, 2000);
     lv_anim_set_repeat_count(&g_left_anim, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_values(&g_left_anim, 0, 3600); // 3600 = 360 degrees * 10
+    lv_anim_set_values(&g_left_anim, 0, 3600);
 
     lv_anim_init(&g_right_anim);
-    lv_anim_set_var(&g_right_anim, g_right_reel);
+    lv_anim_set_var(&g_right_anim, g_right_spinner);
     lv_anim_set_exec_cb(&g_right_anim, reel_anim_cb);
     lv_anim_set_time(&g_right_anim, 2000);
     lv_anim_set_repeat_count(&g_right_anim, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_values(&g_right_anim, 0, -3600); // Opposite direction
+    lv_anim_set_values(&g_right_anim, 0, 3600);
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -344,6 +441,16 @@ static void spotify_control(const char *command)
     if (strcmp(command, "play_pause") == 0)
     {
         url = g_current_track.is_playing ? "https://api.spotify.com/v1/me/player/pause" : "https://api.spotify.com/v1/me/player/play";
+        method = "PUT";
+    }
+    else if (strcmp(command, "pause") == 0)
+    {
+        url = "https://api.spotify.com/v1/me/player/pause";
+        method = "PUT";
+    }
+    else if (strcmp(command, "play") == 0)
+    {
+        url = "https://api.spotify.com/v1/me/player/play";
         method = "PUT";
     }
     else if (strcmp(command, "next") == 0)
@@ -381,11 +488,11 @@ static void spotify_control(const char *command)
         xTaskCreatePinnedToCore(
             [](void *)
             {
-                delay(500); // Wait for Spotify to process
+                delay(300);
                 fetch_spotify_data();
                 vTaskDelete(NULL);
             },
-            "refresh_after_control", 4096, NULL, 1, NULL, 0);
+            "refresh_after_control", 16384, NULL, 1, NULL, 0);
     }
     else
     {
@@ -549,18 +656,20 @@ static void update_spotify_ui(void)
         }
     }
 
-    /* Control reel animation */
+    /* Control reel animation — only start if not already running to avoid reset-blink on each poll */
     if (g_current_track.is_playing)
     {
-        lv_anim_start(&g_left_anim);
-        lv_anim_start(&g_right_anim);
+        if (!lv_anim_get(g_left_spinner, reel_anim_cb))
+            lv_anim_start(&g_left_anim);
+        if (!lv_anim_get(g_right_spinner, reel_anim_cb))
+            lv_anim_start(&g_right_anim);
     }
     else
     {
-        lv_anim_del(g_left_reel, reel_anim_cb);
-        lv_anim_del(g_right_reel, reel_anim_cb);
-        lv_obj_set_style_transform_angle(g_left_reel, 0, LV_PART_MAIN);
-        lv_obj_set_style_transform_angle(g_right_reel, 0, LV_PART_MAIN);
+        lv_anim_del(g_left_spinner, reel_anim_cb);
+        lv_anim_del(g_right_spinner, reel_anim_cb);
+        lv_img_set_angle(g_left_spinner, 0);
+        lv_img_set_angle(g_right_spinner, 0);
     }
 }
 
@@ -568,9 +677,7 @@ static void reel_anim_cb(void *target, int32_t value)
 {
     if (!target)
         return;
-
-    lv_obj_t *obj = (lv_obj_t *)target;
-    lv_obj_set_style_transform_angle(obj, value, LV_PART_MAIN);
+    lv_img_set_angle((lv_obj_t *)target, (int16_t)value);
 }
 
 static bool parse_google_datetime(const char *input, char *out, size_t out_len, time_t *out_time)
