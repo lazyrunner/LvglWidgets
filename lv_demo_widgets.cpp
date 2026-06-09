@@ -419,6 +419,49 @@ static void create_cassette_screen(lv_obj_t *parent)
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Public hardware-button helpers (called from LvglWidgets.ino)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+void spotify_cmd_play_pause(void)
+{
+    const char *cmd = g_current_track.is_playing ? "pause" : "play";
+    bool now_playing = !g_current_track.is_playing;
+    g_current_track.is_playing = now_playing;
+
+    lv_obj_t *btn_label = lv_obj_get_child(g_play_pause_btn, 0);
+    if (btn_label)
+        lv_label_set_text(btn_label, now_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+
+    if (now_playing) {
+        if (!lv_anim_get(g_left_spinner, reel_anim_cb))
+            lv_anim_start(&g_left_anim);
+        if (!lv_anim_get(g_right_spinner, reel_anim_cb))
+            lv_anim_start(&g_right_anim);
+    } else {
+        lv_anim_del(g_left_spinner, reel_anim_cb);
+        lv_anim_del(g_right_spinner, reel_anim_cb);
+        lv_img_set_angle(g_left_spinner, 0);
+        lv_img_set_angle(g_right_spinner, 0);
+    }
+
+    xTaskCreatePinnedToCore(
+        [](void *param) {
+            spotify_control((const char *)param);
+            vTaskDelete(NULL);
+        },
+        "sw_play_cmd", 16384, (void *)cmd, 1, NULL, 0);
+}
+
+void spotify_cmd_next(void)
+{
+    xTaskCreatePinnedToCore(
+        [](void *) {
+            spotify_control("next");
+            vTaskDelete(NULL);
+        },
+        "sw_next_cmd", 16384, NULL, 1, NULL, 0);
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Spotify control commands
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 static void spotify_control(const char *command)

@@ -28,12 +28,11 @@ extern "C" {
  **********************/
 void lv_demo_widgets(void);
 
-/**********************
- *      MACROS
- **********************/
-
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
+
+void spotify_cmd_play_pause(void);
+void spotify_cmd_next(void);
 
 #endif /*LV_DEMO_WIDGETS_H*/

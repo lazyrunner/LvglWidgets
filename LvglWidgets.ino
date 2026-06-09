@@ -88,6 +88,15 @@ static lv_color_t *disp_draw_buf;
 static lv_disp_drv_t disp_drv;
 static uint32_t makeCall= 0;
 
+#define SW_PLAY_PIN 17
+#define SW_NEXT_PIN 9
+#define SW_PREVIOUS_PIN 5
+#define SW_STOP_PIN 14
+#define SW_PAUSE_PIN 46
+
+static bool sw_play_last = HIGH;
+static bool sw_next_last = HIGH;
+
 void makeApiCall() {
   if (WiFi.status() == WL_CONNECTED) {
 
@@ -189,6 +198,8 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
 void setup()
 {
   Serial.begin(115200);
+  pinMode(SW_PLAY_PIN, INPUT_PULLUP);
+  pinMode(SW_NEXT_PIN, INPUT_PULLUP);
   // Serial.setDebugOutput(true);
   // while(!Serial);
   Serial.println("Arduino_GFX LVGL Widgets example");
@@ -308,6 +319,13 @@ void loop()
     makeApiCall();
     makeCall=1;
   }
+
+  bool sw_play = digitalRead(SW_PLAY_PIN);
+  bool sw_next = digitalRead(SW_NEXT_PIN);
+  if (sw_play == LOW && sw_play_last == HIGH) spotify_cmd_play_pause();
+  if (sw_next == LOW && sw_next_last == HIGH) spotify_cmd_next();
+  sw_play_last = sw_play;
+  sw_next_last = sw_next;
 
   delay(5);
 }
